@@ -1,6 +1,5 @@
-from typing import List
 import os
-
+from typing import List
 from amsatop import Htop, Process, TaskType
 
 class Amsatop(Htop):
@@ -9,55 +8,65 @@ class Amsatop(Htop):
 
     def get_processes(self) -> List[Process]:
         procesos = []
-
+        PF_KTHREAD = 0x00200000  # La constante mágica de los profesores
+        
         for carpeta in os.listdir(self.proc_folder):
             if not carpeta.isdigit():
                 continue
-
-            pid = int(carpeta)
+                
+            pid_principal = int(carpeta)
             ruta_proceso = f"{self.proc_folder}/{carpeta}"
-
-            # 1. Leemos el comando
-            ruta_comm = f"{ruta_proceso}/comm"
-            if not os.path.exists(ruta_comm):
+            ruta_stat = f"{ruta_proceso}/stat"
+            
+            if not os.path.exists(ruta_stat):
                 continue
-
-            with open(ruta_comm, "r") as f:
-                comando = f.read().strip()
-
-            # 2. Comprobamos si es KTHREAD
-            es_kthread = False
-            ruta_cmdline = f"{ruta_proceso}/cmdline"
-            if os.path.exists(ruta_cmdline):
-                with open(ruta_cmdline, "r") as f:
-                    if f.read().strip() == "":
-                        es_kthread = True
-
-            tipo_proc = TaskType.KTHREAD if es_kthread else TaskType.PROCESS
-
-            # Añadimos el proceso (fíjate que usamos 'command=')
-            procesos.append(Process(pid=pid, command=comando, type=tipo_proc, priority=None))
-
-            # 3. Buscamos los hilos
-            ruta_task = f"{ruta_proceso}/task"
-            if os.path.exists(ruta_task):
-                for hilo in os.listdir(ruta_task):
-                    if not hilo.isdigit():
-                        continue
-
-                    tid = int(hilo)
-                    if tid == pid:
-                        continue # Saltamos el principal, ya lo hemos añadido
-
-                    ruta_comm_hilo = f"{ruta_task}/{hilo}/comm"
-                    if os.path.exists(ruta_comm_hilo):
-                        with open(ruta_comm_hilo, "r") as f:
-                            comando_hilo = f.read().strip()
-                        # El hilo se añade poniendo su 'tid' en el campo 'pid'
-                        procesos.append(Process(pid=tid, command=comando_hilo, type=TaskType.THREAD, priority=None))
-
+                
+            try:
+                with open(ruta_stat, "r") as f:
+                    contenido_stat = f.read()
+                    
+                # 1. Extraemos el nombre entre paréntesis
+                inicio = contenido_stat.find("(")
+                fin = contenido_stat.rfind(")")
+                comando = contenido_stat[inicio+1:fin]
+                
+                # 2. Leemos los flags (es la palabra nº 6 después del paréntesis)
+                resto_stat = contenido_stat[fin+1:].split()
+                flags = int(resto_stat[6])
+                
+                # 3. Aplicamos la fórmula exacta de los profesores
+                es_kthread = (flags & PF_KTHREAD) != 0
+                
+                tipo_proc = TaskType.KTHREAD if es_kthread else TaskType.PROCESS
+                procesos.append(Process(pid=pid_principal, command=comando, type=tipo_proc, priority=None))
+                
+                # 4. Buscamos hilos dentro de la carpeta task
+                ruta_task = f"{ruta_proceso}/task"
+                if os.path.exists(ruta_task):
+                    for hilo in os.listdir(ruta_task):
+                        if not hilo.isdigit():
+                            continue
+                            
+                        tid = int(hilo)
+                        if tid == pid_principal:
+                            continue
+                            
+                        try:
+                            with open(f"{ruta_task}/{hilo}/stat", "r") as f_hilo:
+                                cont_hilo = f_hilo.read()
+                                
+                            inicio_h = cont_hilo.find("(")
+                            fin_h = cont_hilo.rfind(")")
+                            comando_hilo = cont_hilo[inicio_h+1:fin_h]
+                            
+                            procesos.append(Process(pid=tid, command=comando_hilo, type=TaskType.THREAD, priority=None))
+                        except FileNotFoundError:
+                            continue
+                            
+            except Exception:
+                continue
+                
         return procesos
-
 
     def get_priorities(self) -> List[Process]:
         raise NotImplementedError("Prac-2.2 implementation needed")
